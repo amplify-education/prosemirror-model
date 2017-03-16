@@ -120,7 +120,8 @@ class DOMSerializer {
   renderStructure(structure, node, options) {
     let {dom, contentDOM} = DOMSerializer.renderSpec(doc(options), structure)
     if (node && !node.isLeaf) {
-      if (!contentDOM) throw new RangeError("No content hole in template for non-leaf node")
+      // TODO: follow up on this https://discuss.prosemirror.net/t/flattening-non-leaf-nodes-into-text-on-copy-paste/695
+      if (!contentDOM) console.warn("No content hole in template for non-leaf node")
       if (options.onContent)
         options.onContent(node, contentDOM, options)
       else
