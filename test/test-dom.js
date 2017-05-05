@@ -1,4 +1,4 @@
-const {schema, eq, doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, a2, br, img, hr} = require("./build")
+const {schema, eq, doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, br, img, hr} = require("prosemirror-test-builder")
 const ist = require("ist")
 const {DOMParser, DOMSerializer, Slice, Fragment, Schema} = require("../dist")
 
@@ -36,16 +36,16 @@ describe("DOMParser", () => {
             "<p>hi<br/>there</p>"))
 
     it("can represent an image",
-       test(doc(p("hi", img, "there")),
-            '<p>hi<img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="x"/>there</p>'))
+       test(doc(p("hi", img({alt: "x"}), "there")),
+            '<p>hi<img src="img.png" alt="x"/>there</p>'))
 
     it("joins styles",
        test(doc(p("one", strong("two", em("three")), em("four"), "five")),
             "<p>one<strong>two</strong><em><strong>three</strong>four</em>five</p>"))
 
     it("can represent links",
-       test(doc(p("a ", a("big ", a2("nested"), " link"))),
-            "<p>a <a href=\"http://foo\">big </a><a href=\"http://bar\">nested</a><a href=\"http://foo\"> link</a></p>"))
+       test(doc(p("a ", a({href: "foo"}, "big ", a({href: "bar"}, "nested"), " link"))),
+            "<p>a <a href=\"foo\">big </a><a href=\"bar\">nested</a><a href=\"foo\"> link</a></p>"))
 
     it("can represent and unordered list",
        test(doc(ul(li(p("one")), li(p("two")), li(p("three", strong("!")))), p("after")),
@@ -79,11 +79,11 @@ describe("DOMParser", () => {
        test(doc(p(em("hi", br, "x"))),
             "<p><em>hi<br>x</em></p>"))
 
-    function recover(html, doc) {
+    function recover(html, doc, options) {
       return () => {
         let dom = document.createElement("div")
         dom.innerHTML = html
-        ist(parser.parse(dom), doc, eq)
+        ist(parser.parse(dom, options), doc, eq)
       }
     }
 
@@ -143,6 +143,10 @@ describe("DOMParser", () => {
        recover("<pre>foo\n</pre>",
                doc(pre("foo\n"))))
 
+    it("normalizes newlines when preserving whitespace",
+       recover("<p>foo  bar\nbaz</p>",
+              doc(p("foo  bar baz")), {preserveWhitespace: true}))
+
     it("ignores <script> tags",
        recover("<p>hello<script>alert('x')</script>!</p>",
                doc(p("hello!"))))
@@ -188,12 +192,12 @@ describe("DOMParser", () => {
        parse("foo   bar", {preserveWhitespace: true},
              doc(p("foo   bar"))))
 
-    function open(html, nodes, openLeft, openRight) {
+    function open(html, nodes, openStart, openEnd) {
       return () => {
         let dom = document.createElement("div")
         dom.innerHTML = html
         let result = parser.parseSlice(dom)
-        ist(result, new Slice(Fragment.from(nodes.map(n => typeof n == "string" ? schema.text(n) : n)), openLeft, openRight), eq)
+        ist(result, new Slice(Fragment.from(nodes.map(n => typeof n == "string" ? schema.text(n) : n)), openStart, openEnd), eq)
       }
     }
 
@@ -211,6 +215,9 @@ describe("DOMParser", () => {
 
     it("accepts content open to the right",
        open("<li>foo</li><li></li>", [li(p("foo")), li()], 2, 1))
+
+    it("will create textblocks for block nodes",
+       open("<div><div>foo</div><div>bar</div></div>", [p("foo"), p("bar")], 1, 1))
 
     function find(html, doc) {
       return () => {
@@ -331,5 +338,13 @@ describe("DOMParser", () => {
       })
       ist(DOMParser.schemaRules(schema).map(r => r.tag).join(" "), "em bar foo i")
     })
+  })
+})
+
+describe("DOMSerializer", () => {
+  it("can omit a mark", () => {
+    let s = new DOMSerializer(serializer.nodes, Object.assign({}, serializer.marks, {em: null}))
+    ist(s.serializeNode(p("foo", em("bar"), strong("baz")), {document}).innerHTML,
+        "foobar<strong>baz</strong>")
   })
 })

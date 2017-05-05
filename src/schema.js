@@ -194,8 +194,6 @@ class Attribute {
 
 // Marks
 
-let warnedAboutInclusive = false
-
 // ::- Like nodes, marks (which are associated with nodes to signify
 // things like emphasis or being part of a link) are tagged with type
 // objects, which are instantiated once per `Schema`.
@@ -212,14 +210,6 @@ class MarkType {
     // :: MarkSpec
     // The spec on which the type is based.
     this.spec = spec
-
-    if (spec.inclusiveRight === false && spec.inclusive == null) {
-      spec.inclusive = false
-      if (!warnedAboutInclusive && typeof console != "undefined" && console.warn) {
-        warnedAboutInclusive = true
-        console.warn("MarkSpec.inclusiveRight is now called MarkSpec.inclusive")
-      }
-    }
 
     this.attrs = initAttrs(spec.attrs)
 
@@ -330,7 +320,13 @@ exports.MarkType = MarkType
 //   Typically, non-default-paragraph textblock types, and possible
 //   list items, are marked as defining.
 //
-//   toDOM:: ?(Node) → DOMOutputSpec
+//   isolating:: ?bool
+//   When enabled (default is false), the sides of nodes of this type
+//   count as boundaries that regular editing operations, like
+//   backspacing or lifting, won't cross. An example of a node that
+//   should probably have this set is a table cell.
+//
+//   toDOM:: ?(node: Node) → DOMOutputSpec
 //   Defines the default way a node of this type should be serialized
 //   to DOM/HTML (as used by
 //   [`DOMSerializer.fromSchema`](#model.DOMSerializer^fromSchema)).
@@ -379,7 +375,7 @@ exports.MarkType = MarkType
 //   group:: ?string
 //   The group or space-separated groups to which this node belongs.
 //
-//   toDOM:: ?(mark: Mark) → DOMOutputSpec
+//   toDOM:: ?(mark: Mark, inline: bool) → DOMOutputSpec
 //   Defines the default way marks of this type should be serialized
 //   to DOM/HTML.
 //

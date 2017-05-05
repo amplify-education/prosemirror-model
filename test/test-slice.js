@@ -1,13 +1,13 @@
-const {doc, p, li, ul, em, a, blockquote} = require("./build")
+const {doc, p, li, ul, em, a, blockquote} = require("prosemirror-test-builder")
 const ist = require("ist")
 
 describe("Node", () => {
   describe("slice", () => {
-    function t(doc, expect, openLeft, openRight) {
+    function t(doc, expect, openStart, openEnd) {
       let slice = doc.slice(doc.tag.a || 0, doc.tag.b)
       ist(slice.content.eq(expect.content))
-      ist(slice.openLeft, openLeft)
-      ist(slice.openRight, openRight)
+      ist(slice.openStart, openStart)
+      ist(slice.openEnd, openEnd)
     }
 
     it("can cut half a paragraph", () =>

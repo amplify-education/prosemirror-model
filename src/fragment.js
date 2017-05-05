@@ -14,7 +14,11 @@ class Fragment {
       this.size += content[i].nodeSize
   }
 
-  nodesBetween(from, to, f, nodeStart, parent) {
+  // :: (number, number, (node: Node, start: number, parent: Node, index: number) → ?bool)
+  // Invoke a callback for all descendant nodes between the given two
+  // positions (relative to start of this fragment). Doesn't descend
+  // into a node when the callback returns `false`.
+  nodesBetween(from, to, f, nodeStart = 0, parent) {
     for (let i = 0, pos = 0; pos < to; i++) {
       let child = this.content[i], end = pos + child.nodeSize
       if (end > from && f(child, nodeStart + pos, parent, i) !== false && child.content.size) {
@@ -25,6 +29,13 @@ class Fragment {
       }
       pos = end
     }
+  }
+
+  // :: ((node: Node, pos: number, parent: Node) → ?bool)
+  // Call the given callback for every descendant node. The callback
+  // may return `false` to prevent traversal of its child nodes.
+  descendants(f) {
+    this.nodesBetween(0, this.size, f)
   }
 
   // : (number, number, ?string, ?string) → string

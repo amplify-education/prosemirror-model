@@ -1,5 +1,5 @@
 const {Mark, Schema} = require("../dist")
-const {schema, doc, p, em, a} = require("./build")
+const {schema, doc, p, em, a} = require("prosemirror-test-builder")
 const ist = require("ist")
 
 let em_ = schema.mark("em")
@@ -65,8 +65,8 @@ describe("Mark", () => {
        ist(strong.addToSet([em_]), [em_, strong], Mark.sameSet))
 
     it("replaces different marks with new attributes", () =>
-       ist(link("http://bar").addToSet([em_, link("http://foo")]),
-           [em_, link("http://bar")], Mark.sameSet))
+       ist(link("http://bar").addToSet([link("http://foo"), em_]),
+           [link("http://bar"), em_], Mark.sameSet))
 
     it("does nothing when adding an existing link", () =>
        ist(link("http://foo").addToSet([em_, link("http://foo")]),

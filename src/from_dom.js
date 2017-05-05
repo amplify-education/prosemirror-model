@@ -76,9 +76,12 @@ const {Mark} = require("./mark")
 //   called, and its result used, instead of parsing the node's child
 //   nodes.
 //
-//   preserveWhitespace:: ?bool
+//   preserveWhitespace:: ?union<bool, "full">
 //   Controls whether whitespace should be preserved when parsing the
-//   content inside the matched element.
+//   content inside the matched element. `false` means whitespace may
+//   be collapsed, `true` means that whitespace should be preserved
+//   but newlines normalized to spaces, and `"full"` means that
+//   newlines should also be preserved.
 
 // ::- A DOM parser represents a strategy for parsing DOM content into
 // a ProseMirror document conforming to a given schema. Its behavior
@@ -106,9 +109,10 @@ class DOMParser {
   //
   //   options::- Configuration options.
   //
-  //     preserveWhitespace:: ?bool
+  //     preserveWhitespace:: ?union<bool, "full">
   //     By default, whitespace is collapsed as per HTML's rules. Pass
-  //     true here to prevent the parser from doing that.
+  //     `true` to preserve whitespace, but normalize newlines to
+  //     spaces, and `"full"` to preserve whitespace entirely.
   //
   //     findPositions:: ?[{node: dom.Node, offset: number}]
   //     When given, the parser will, beside parsing the content,
@@ -135,7 +139,7 @@ class DOMParser {
   //     `topNode`.
   //
   //     context:: ?ResolvedPos
-  //     A set of additional node names to cound as
+  //     A set of additional node names to count as
   //     [context](#model.ParseRule.context) when parsing, above the
   //     given [top node](#model.DOMParser.parse^options.topNode).
   parse(dom, options = {}) {
@@ -244,7 +248,11 @@ const ignoreTags = {
 const listTags = {ol: true, ul: true}
 
 // Using a bitfield for node context options
-const OPT_PRESERVE_WS = 1, OPT_OPEN_LEFT = 2
+const OPT_PRESERVE_WS = 1, OPT_PRESERVE_WS_FULL = 2, OPT_OPEN_LEFT = 4
+
+function wsOptionsFor(preserveWhitespace) {
+  return (preserveWhitespace ? OPT_PRESERVE_WS : 0) | (preserveWhitespace === "full" ? OPT_PRESERVE_WS_FULL : 0)
+}
 
 class NodeContext {
   constructor(type, attrs, solid, match, options) {
@@ -273,7 +281,7 @@ class NodeContext {
     return this.match.findWrapping(type, attrs)
   }
 
-  finish(openRight) {
+  finish(openEnd) {
     if (!(this.options & OPT_PRESERVE_WS)) { // Strip trailing whitespace
       let last = this.content[this.content.length - 1], m
       if (last && last.isText && (m = /\s+$/.exec(last.text))) {
@@ -282,7 +290,7 @@ class NodeContext {
       }
     }
     let content = Fragment.from(this.content)
-    if (!openRight && this.match)
+    if (!openEnd && this.match)
       content = content.append(this.match.fillBefore(Fragment.empty, true))
     return this.type ? this.type.create(this.attrs, content) : content
   }
@@ -297,7 +305,7 @@ class ParseContext {
     this.options = options
     this.isOpen = open
     let topNode = options.topNode, topContext
-    let topOptions = (options.preserveWhitespace ? OPT_PRESERVE_WS : 0) | (open ? OPT_OPEN_LEFT : 0)
+    let topOptions = wsOptionsFor(options.preserveWhitespace) | (open ? OPT_OPEN_LEFT : 0)
     if (topNode)
       topContext = new NodeContext(topNode.type, topNode.attrs, true,
                                    topNode.contentMatchAt(options.topStart || 0), topOptions)
@@ -310,6 +318,7 @@ class ParseContext {
     this.marks = Mark.none
     this.open = 0
     this.find = options.findPositions
+    this.needsBlock = false
   }
 
   get top() {
@@ -352,6 +361,8 @@ class ParseContext {
           if (!nodeBefore || nodeBefore.isText && /\s$/.test(nodeBefore.text))
             value = value.slice(1)
         }
+      } else if (!(top.options & OPT_PRESERVE_WS_FULL)) {
+        value = value.replace(/\r?\n|\r/g, " ")
       }
       if (value) this.insertNode(this.parser.schema.text(value, this.marks))
       this.findInText(dom)
@@ -371,9 +382,14 @@ class ParseContext {
       this.findInside(dom)
     } else if (!rule || rule.skip) {
       if (rule && rule.skip.nodeType) dom = rule.skip
-      let sync = blockTags.hasOwnProperty(name) && this.top
+      let sync, oldNeedsBlock = this.needsBlock
+      if (blockTags.hasOwnProperty(name)) {
+        sync = this.top
+        if (!sync.type) this.needsBlock = true
+      }
       this.addAll(dom)
       if (sync) this.sync(sync)
+      this.needsBlock = oldNeedsBlock
     } else {
       this.addElementByRule(dom, rule)
     }
@@ -468,6 +484,10 @@ class ParseContext {
   // : (Node) → ?Node
   // Try to insert the given node, adjusting the context when needed.
   insertNode(node) {
+    if (node.isInline && this.needsBlock && !this.top.type) {
+      let block = this.textblockFromContext()
+      if (block) this.enter(block)
+    }
     if (this.findPlace(node.type, node.attrs)) {
       this.closeExtra()
       let top = this.top
@@ -497,7 +517,7 @@ class ParseContext {
     this.closeExtra()
     let top = this.top
     top.match = top.match && top.match.matchType(type, attrs)
-    let options = preserveWS == null ? top.options & OPT_PRESERVE_WS : preserveWS ? OPT_PRESERVE_WS : 0
+    let options = preserveWS == null ? top.options & ~OPT_OPEN_LEFT : wsOptionsFor(preserveWS)
     if ((top.options & OPT_OPEN_LEFT) && top.content.length == 0) options |= OPT_OPEN_LEFT
     this.nodes.push(new NodeContext(type, attrs, solid, null, options))
     this.open++
@@ -505,11 +525,11 @@ class ParseContext {
 
   // Make sure all nodes above this.open are finished and added to
   // their parents
-  closeExtra(openRight) {
+  closeExtra(openEnd) {
     let i = this.nodes.length - 1
     if (i > this.open) {
       this.marks = Mark.none
-      for (; i > this.open; i--) this.nodes[i - 1].content.push(this.nodes[i].finish(openRight))
+      for (; i > this.open; i--) this.nodes[i - 1].content.push(this.nodes[i].finish(openEnd))
       this.nodes.length = this.open + 1
     }
   }
@@ -548,14 +568,14 @@ class ParseContext {
 
   findInside(parent) {
     if (this.find) for (let i = 0; i < this.find.length; i++) {
-      if (this.find[i].pos == null && parent.contains(this.find[i].node))
+      if (this.find[i].pos == null && parent.nodeType == 1 && parent.contains(this.find[i].node))
         this.find[i].pos = this.currentPos
     }
   }
 
   findAround(parent, content, before) {
     if (parent != content && this.find) for (let i = 0; i < this.find.length; i++) {
-      if (this.find[i].pos == null && parent.contains(this.find[i].node)) {
+      if (this.find[i].pos == null && parent.nodeType == 1 && parent.contains(this.find[i].node)) {
         let pos = content.compareDocumentPosition(this.find[i].node)
         if (pos & (before ? 2 : 4))
           this.find[i].pos = this.currentPos
@@ -572,7 +592,7 @@ class ParseContext {
 
   // : (string) → bool
   // Determines whether the given [context
-  // string](##ParseRule.context) matches this context.
+  // string](#ParseRule.context) matches this context.
   matchesContext(context) {
     let parts = context.split("/")
     let option = this.options.context
@@ -598,6 +618,18 @@ class ParseContext {
       return true
     }
     return match(parts.length - 1, this.open)
+  }
+
+  textblockFromContext() {
+    let $context = this.options.context
+    if ($context) for (let d = $context.depth; d >= 0; d--) {
+      let deflt = $context.node(d).defaultContentType($context.indexAfter(d))
+      if (deflt && deflt.isTextblock && deflt.defaultAttrs) return deflt
+    }
+    for (let name in this.parser.schema.nodes) {
+      let type = this.parser.schema.nodes[name]
+      if (type.isTextblock && type.defaultAttrs) return type
+    }
   }
 }
 

@@ -71,7 +71,7 @@ class ResolvedPos {
 
   // :: (?number) → number
   // The (absolute) position directly before the node at the given
-  // level, or, when `level` is `this.level + 1`, the original
+  // level, or, when `level` is `this.depth + 1`, the original
   // position.
   before(depth) {
     depth = this.resolveDepth(depth)
@@ -81,7 +81,7 @@ class ResolvedPos {
 
   // :: (?number) → number
   // The (absolute) position directly after the node at the given
-  // level, or, when `level` is `this.level + 1`, the original
+  // level, or, when `level` is `this.depth + 1`, the original
   // position.
   after(depth) {
     depth = this.resolveDepth(depth)
@@ -119,7 +119,7 @@ class ResolvedPos {
 
   // :: (?bool) → [Mark]
   // Get the marks at this position, factoring in the surrounding
-  // marks' [`inclusive`](##model.MarkSpec.inclusive) property. If the
+  // marks' [`inclusive`](#model.MarkSpec.inclusive) property. If the
   // position is at the start of a non-empty node, or `after` is true,
   // the marks of the node after it (if any) are returned.
   marks(after) {
@@ -175,6 +175,18 @@ class ResolvedPos {
   // Query whether the given position shares the same parent node.
   sameParent(other) {
     return this.pos - this.parentOffset == other.pos - other.parentOffset
+  }
+
+  // :: (ResolvedPos) → ResolvedPos
+  // Return the greater of this and the given position.
+  max(other) {
+    return other.pos > this.pos ? other : this
+  }
+
+  // :: (ResolvedPos) → ResolvedPos
+  // Return the smaller of this and the given position.
+  min(other) {
+    return other.pos < this.pos ? other : this
   }
 
   toString() {
