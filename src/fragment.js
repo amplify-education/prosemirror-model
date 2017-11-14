@@ -1,14 +1,16 @@
-const {findDiffStart, findDiffEnd} = require("./diff")
+import {findDiffStart, findDiffEnd} from "./diff"
 
-// ::- Fragment is the type used to represent a node's collection of
-// child nodes.
+// ::- A fragment represents a node's collection of child nodes.
 //
-// Fragments are persistent data structures. That means you should
-// _not_ mutate them or their content, but create new instances
-// whenever needed. The API tries to make this easy.
-class Fragment {
+// Like nodes, fragments are persistent data structures, and you
+// should not mutate them or their content. Rather, you create new
+// instances whenever needed. The API tries to make this easy.
+export class Fragment {
   constructor(content, size) {
     this.content = content
+    // :: number
+    // The size of the fragment, which is the total of the size of its
+    // content nodes.
     this.size = size || 0
     if (size == null) for (let i = 0; i < content.length; i++)
       this.size += content[i].nodeSize
@@ -33,7 +35,7 @@ class Fragment {
 
   // :: ((node: Node, pos: number, parent: Node) → ?bool)
   // Call the given callback for every descendant node. The callback
-  // may return `false` to prevent traversal of its child nodes.
+  // may return `false` to prevent traversal of a given node's children.
   descendants(f) {
     this.nodesBetween(0, this.size, f)
   }
@@ -57,8 +59,8 @@ class Fragment {
   }
 
   // :: (Fragment) → Fragment
-  // Create a new fragment containing the content of this fragment and
-  // `other`.
+  // Create a new fragment containing the combined content of this
+  // fragment and the other.
   append(other) {
     if (!other.size) return this
     if (!this.size) return other
@@ -156,14 +158,6 @@ class Fragment {
     return found
   }
 
-  // :: (number) → number
-  // Get the offset at (size of children before) the given index.
-  offsetAt(index) {
-    let offset = 0
-    for (let i = 0; i < index; i++) offset += this.content[i].nodeSize
-    return offset
-  }
-
   // :: (number) → ?Node
   // Get the child node at the given index, if it exists.
   maybeChild(index) {
@@ -235,7 +229,7 @@ class Fragment {
 
   // :: ([Node]) → Fragment
   // Build a fragment from an array of nodes. Ensures that adjacent
-  // text nodes with the same style are joined together.
+  // text nodes with the same marks are joined together.
   static fromArray(array) {
     if (!array.length) return Fragment.empty
     let joined, size = 0
@@ -264,7 +258,6 @@ class Fragment {
     return new Fragment([nodes], nodes.nodeSize)
   }
 }
-exports.Fragment = Fragment
 
 const found = {index: 0, offset: 0}
 function retIndex(index, offset) {

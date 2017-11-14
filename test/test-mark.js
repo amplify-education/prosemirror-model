@@ -8,7 +8,7 @@ let link = (href, title) => schema.mark("link", {href, title})
 let code = schema.mark("code")
 
 let customSchema = new Schema({
-  nodes: {doc: {content: "paragraph+"}, paragraph: {content: "text<_>*"}, text: {}},
+  nodes: {doc: {content: "paragraph+"}, paragraph: {content: "text*"}, text: {}},
   marks: {
     remark: {attrs: {id: {}}, excludes: "", inclusive: false},
     user: {attrs: {id: {}}, excludes: "_"},
@@ -162,12 +162,6 @@ describe("Mark", () => {
 
     it("omits non-inclusive marks at the end of a line", () =>
        ist(Mark.sameSet(customDoc.resolve(20).marks(), [])))
-
-    it("omits non-inclusive marks at the start of a text node", () =>
-       ist(Mark.sameSet(customDoc.resolve(12).marks(true), [])))
-
-    it("omits non-inclusive marks at the start of a line", () =>
-       ist(Mark.sameSet(customDoc.resolve(22).marks(true), [])))
 
     it("includes non-inclusive marks between two marked nodes", () =>
        ist(Mark.sameSet(customDoc.resolve(15).marks(), [remark1])))

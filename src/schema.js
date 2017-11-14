@@ -1,9 +1,9 @@
-const OrderedMap = require("orderedmap")
+import OrderedMap from "orderedmap"
 
-const {Node, TextNode} = require("./node")
-const {Fragment} = require("./fragment")
-const {Mark} = require("./mark")
-const {ContentExpr} = require("./content")
+import {Node, TextNode} from "./node"
+import {Fragment} from "./fragment"
+import {Mark} from "./mark"
+import {ContentMatch} from "./content"
 
 // For node types where all attrs have a default value (or which don't
 // have any attributes), build up a single reusable default attribute
@@ -13,7 +13,7 @@ function defaultAttrs(attrs) {
   let defaults = Object.create(null)
   for (let attrName in attrs) {
     let attr = attrs[attrName]
-    if (attr.default === undefined) return null
+    if (!attr.hasDefault) return null
     defaults[attrName] = attr.default
   }
   return defaults
@@ -23,14 +23,10 @@ function computeAttrs(attrs, value) {
   let built = Object.create(null)
   for (let name in attrs) {
     let given = value && value[name]
-    if (given == null) {
+    if (given === undefined) {
       let attr = attrs[name]
-      if (attr.default !== undefined)
-        given = attr.default
-      else if (attr.compute)
-        given = attr.compute()
-      else
-        throw new RangeError("No value supplied for attribute " + name)
+      if (attr.hasDefault) given = attr.default
+      else throw new RangeError("No value supplied for attribute " + name)
     }
     built[name] = given
   }
@@ -44,10 +40,10 @@ function initAttrs(attrs) {
 }
 
 // ::- Node types are objects allocated once per `Schema` and used to
-// tag `Node` instances with a type. They contain information about
-// the node type, such as its name and what kind of node it
+// [tag](#model.Node.type) `Node` instances. They contain information
+// about the node type, such as its name and what kind of node it
 // represents.
-class NodeType {
+export class NodeType {
   constructor(name, schema, spec) {
     // :: string
     // The name the node type has in this schema.
@@ -65,7 +61,19 @@ class NodeType {
     this.attrs = initAttrs(spec.attrs)
 
     this.defaultAttrs = defaultAttrs(this.attrs)
-    this.contentExpr = null
+
+    // :: ContentMatch
+    // The starting match of the node type's content expression.
+    this.contentMatch = null
+
+    // : ?[MarkType]
+    // The set of marks allowed in this node. `null` means all marks
+    // are allowed.
+    this.markSet = null
+
+    // :: bool
+    // True if this node type has inline content.
+    this.inlineContent = null
 
     // :: bool
     // True if this is a block type
@@ -83,15 +91,11 @@ class NodeType {
   // :: bool
   // True if this is a textblock type, a block that contains inline
   // content.
-  get isTextblock() { return this.isBlock && this.contentExpr.inlineContent }
-
-  // :: bool
-  // True if this node type has inline content.
-  get inlineContent() { return this.contentExpr.inlineContent }
+  get isTextblock() { return this.isBlock && this.inlineContent }
 
   // :: bool
   // True for node types that allow no content.
-  get isLeaf() { return this.contentExpr.isLeaf }
+  get isLeaf() { return this.contentMatch == ContentMatch.empty }
 
   // :: bool
   // True when this node is an atom, i.e. when it does not have
@@ -105,7 +109,7 @@ class NodeType {
   }
 
   compatibleContent(other) {
-    return this == other || this.contentExpr.compatible(other.contentExpr)
+    return this == other || this.contentMatch.compatible(other.contentMatch)
   }
 
   computeAttrs(attrs) {
@@ -131,11 +135,10 @@ class NodeType {
   // against the node type's content restrictions, and throw an error
   // if it doesn't match.
   createChecked(attrs, content, marks) {
-    attrs = this.computeAttrs(attrs)
     content = Fragment.from(content)
-    if (!this.validContent(content, attrs))
+    if (!this.validContent(content))
       throw new RangeError("Invalid content for node " + this.name)
-    return new Node(this, attrs, content, Mark.setFrom(marks))
+    return new Node(this, this.computeAttrs(attrs), content, Mark.setFrom(marks))
   }
 
   // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → ?Node
@@ -149,20 +152,53 @@ class NodeType {
     attrs = this.computeAttrs(attrs)
     content = Fragment.from(content)
     if (content.size) {
-      let before = this.contentExpr.start(attrs).fillBefore(content)
+      let before = this.contentMatch.fillBefore(content)
       if (!before) return null
       content = before.append(content)
     }
-    let after = this.contentExpr.getMatchAt(attrs, content).fillBefore(Fragment.empty, true)
+    let after = this.contentMatch.matchFragment(content).fillBefore(Fragment.empty, true)
     if (!after) return null
     return new Node(this, attrs, content.append(after), Mark.setFrom(marks))
   }
 
-  // :: (Fragment, ?Object) → bool
+  // :: (Fragment) → bool
   // Returns true if the given fragment is valid content for this node
   // type with the given attributes.
-  validContent(content, attrs) {
-    return this.contentExpr.matches(attrs, content)
+  validContent(content) {
+    let result = this.contentMatch.matchFragment(content)
+    if (!result || !result.validEnd) return false
+    for (let i = 0; i < content.childCount; i++)
+      if (!this.allowsMarks(content.child(i).marks)) return false
+    return true
+  }
+
+  // :: (MarkType) → bool
+  // Check whether the given mark type is allowed in this node.
+  allowsMarkType(markType) {
+    return this.markSet == null || this.markSet.indexOf(markType) > -1
+  }
+
+  // :: ([Mark]) → bool
+  // Test whether the given set of marks are allowed in this node.
+  allowsMarks(marks) {
+    if (this.markSet == null) return true
+    for (let i = 0; i < marks.length; i++) if (!this.allowsMarkType(marks[i].type)) return false
+    return true
+  }
+
+  // :: ([Mark]) → [Mark]
+  // Removes the marks that are not allowed in this node from the given set.
+  allowedMarks(marks) {
+    if (this.markSet == null) return marks
+    let copy
+    for (let i = 0; i < marks.length; i++) {
+      if (!this.allowsMarkType(marks[i].type)) {
+        if (!copy) copy = marks.slice(0, i)
+      } else if (copy) {
+        copy.push(marks[i])
+      }
+    }
+    return !copy ? marks : copy.length ? copy : Mark.empty
   }
 
   static compile(nodes, schema) {
@@ -177,27 +213,27 @@ class NodeType {
     return result
   }
 }
-exports.NodeType = NodeType
 
 // Attribute descriptors
 
 class Attribute {
   constructor(options) {
+    this.hasDefault = Object.prototype.hasOwnProperty.call(options, "default")
     this.default = options.default
-    this.compute = options.compute
   }
 
   get isRequired() {
-    return this.default === undefined && !this.compute
+    return !this.hasDefault
   }
 }
 
 // Marks
 
 // ::- Like nodes, marks (which are associated with nodes to signify
-// things like emphasis or being part of a link) are tagged with type
-// objects, which are instantiated once per `Schema`.
-class MarkType {
+// things like emphasis or being part of a link) are
+// [tagged](#model.Mark.type) with type objects, which are
+// instantiated once per `Schema`.
+export class MarkType {
   constructor(name, rank, schema, spec) {
     // :: string
     // The name of the mark type.
@@ -251,24 +287,31 @@ class MarkType {
       if (set[i].type == this) return set[i]
   }
 
-  // :: MarkType → bool
+  // :: (MarkType) → bool
+  // Queries whether a given mark type is
+  // [excluded](#model.MarkSpec.excludes) by this one.
   excludes(other) {
     return this.excluded.indexOf(other) > -1
   }
 }
-exports.MarkType = MarkType
 
 // SchemaSpec:: interface
-// An object describing a schema, as passed to the `Schema`
+// An object describing a schema, as passed to the [`Schema`](#model.Schema)
 // constructor.
 //
 //   nodes:: union<Object<NodeSpec>, OrderedMap<NodeSpec>>
-//   The node types in this schema. Maps names to `NodeSpec` objects
-//   describing the node to be associated with that name. Their order
-//   is significant
+//   The node types in this schema. Maps names to
+//   [`NodeSpec`](#model.NodeSpec) objects that describe the node type
+//   associated with that name. Their order is significant—it
+//   determines which [parse rules](#model.NodeSpec.parseDOM) take
+//   precedence by default, and which nodes come first in a given
+//   [group](#model.NodeSpec.group).
 //
 //   marks:: ?union<Object<MarkSpec>, OrderedMap<MarkSpec>>
-//   The mark types that exist in this schema.
+//   The mark types that exist in this schema. The order in which they
+//   are provided determines the order in which [mark
+//   sets](#model.Mark.addToSet) are sorted and in which [parse
+//   rules](#model.MarkSpec.parseDOM) are tried.
 //
 //   topNode:: ?string
 //   The name of the default top-level node for the schema. Defaults
@@ -278,16 +321,23 @@ exports.MarkType = MarkType
 //
 //   content:: ?string
 //   The content expression for this node, as described in the [schema
-//   guide](/docs/guides/schema/). When not given, the node does not allow
-//   any content.
+//   guide](/docs/guide/#schema.content_expressions). When not given,
+//   the node does not allow any content.
+//
+//   marks:: ?string
+//   The marks that are allowed inside of this node. May be a
+//   space-separated string referring to mark names or groups, `"_"`
+//   to explicitly allow all marks, or `""` to disallow marks. When
+//   not given, nodes with inline content default to allowing all
+//   marks, other nodes default to not allowing marks.
 //
 //   group:: ?string
-//   The group or space-separated groups to which this node belongs, as
-//   referred to in the content expressions for the schema.
+//   The group or space-separated groups to which this node belongs,
+//   which can be referred to in the content expressions for the
+//   schema.
 //
 //   inline:: ?bool
-//   Should be set to a truthy value for inline nodes. (Implied for
-//   text nodes.)
+//   Should be set to true for inline nodes. (Implied for text nodes.)
 //
 //   atom:: ?bool
 //   Can be set to true to indicate that, though this isn't a [leaf
@@ -298,8 +348,8 @@ exports.MarkType = MarkType
 //   The attributes that nodes of this type get.
 //
 //   selectable:: ?bool
-//   Controls whether nodes of this type can be selected (as a [node
-//   selection](#state.NodeSelection)). Defaults to true for non-text
+//   Controls whether nodes of this type can be selected as a [node
+//   selection](#state.NodeSelection). Defaults to true for non-text
 //   nodes.
 //
 //   draggable:: ?bool
@@ -315,25 +365,25 @@ exports.MarkType = MarkType
 //   node during replace operations (such as paste). Non-defining (the
 //   default) nodes get dropped when their entire content is replaced,
 //   whereas defining nodes persist and wrap the inserted content.
-//   Likewise, the the _inserted_ content, when not inserting into a
-//   textblock, the defining parents of the content are preserved.
-//   Typically, non-default-paragraph textblock types, and possible
-//   list items, are marked as defining.
+//   Likewise, in _inserted_ content the defining parents of the
+//   content are preserved when possible. Typically,
+//   non-default-paragraph textblock types, and possibly list items,
+//   are marked as defining.
 //
 //   isolating:: ?bool
 //   When enabled (default is false), the sides of nodes of this type
 //   count as boundaries that regular editing operations, like
 //   backspacing or lifting, won't cross. An example of a node that
-//   should probably have this set is a table cell.
+//   should probably have this enabled is a table cell.
 //
 //   toDOM:: ?(node: Node) → DOMOutputSpec
 //   Defines the default way a node of this type should be serialized
 //   to DOM/HTML (as used by
 //   [`DOMSerializer.fromSchema`](#model.DOMSerializer^fromSchema)).
-//   Should return an [array structure](#model.DOMOutputSpec) that
-//   describes the resulting DOM structure, with an optional number
-//   zero (“hole”) in it to indicate where the node's content should
-//   be inserted.
+//   Should return a DOM node or an [array
+//   structure](#model.DOMOutputSpec) that describes one, with an
+//   optional number zero (“hole”) in it to indicate where the node's
+//   content should be inserted.
 //
 //   For text nodes, the default is to create a text DOM node. Though
 //   it is possible to create a serializer where text is rendered
@@ -355,12 +405,13 @@ exports.MarkType = MarkType
 //
 //   inclusive:: ?bool
 //   Whether this mark should be active when the cursor is positioned
-//   at the start or end boundary of the mark. Defaults to true.
+//   at its end (or at its start when that is also the start of the
+//   parent node). Defaults to true.
 //
 //   excludes:: ?string
 //   Determines which other marks this mark can coexist with. Should
 //   be a space-separated strings naming other marks or groups of marks.
-//   When a mark is [added](#model.mark.addToSet) to a set, all marks
+//   When a mark is [added](#model.Mark.addToSet) to a set, all marks
 //   that it excludes are removed in the process. If the set contains
 //   any mark that excludes the new mark but is not, itself, excluded
 //   by the new mark, the mark can not be added an the set. You can
@@ -373,7 +424,7 @@ exports.MarkType = MarkType
 //   coexist (as long as they have different attributes).
 //
 //   group:: ?string
-//   The group or space-separated groups to which this node belongs.
+//   The group or space-separated groups to which this mark belongs.
 //
 //   toDOM:: ?(mark: Mark, inline: bool) → DOMOutputSpec
 //   Defines the default way marks of this type should be serialized
@@ -386,30 +437,29 @@ exports.MarkType = MarkType
 
 // AttributeSpec:: interface
 //
-// Used to define attributes. Attributes that have no default or
-// compute property must be provided whenever a node or mark of a type
-// that has them is created.
-//
-// The following fields are supported:
+// Used to [define](#model.NodeSpec.attrs) attributes on nodes or
+// marks.
 //
 //   default:: ?any
-//   The default value for this attribute, to choose when no
-//   explicit value is provided.
-//
-//   compute:: ?() → any
-//   A function that computes a default value for the attribute.
+//   The default value for this attribute, to use when no explicit
+//   value is provided. Attributes that have no default must be
+//   provided whenever a node or mark of a type that has them is
+//   created.
 
-// ::- A document schema.
-class Schema {
+// ::- A document schema. Holds [node](#model.NodeType) and [mark
+// type](#model.MarkType) objects for the nodes and marks that may
+// occur in conforming documents, and provides functionality for
+// creating and deserializing such documents.
+export class Schema {
   // :: (SchemaSpec)
-  // Construct a schema from a specification.
+  // Construct a schema from a schema [specification](#model.SchemaSpec).
   constructor(spec) {
     // :: SchemaSpec
     // The [spec](#model.SchemaSpec) on which the schema is based,
     // with the added guarantee that its `nodes` and `marks`
     // properties are
     // [`OrderedMap`](https://github.com/marijnh/orderedmap) instances
-    // (not raw objects or null).
+    // (not raw objects).
     this.spec = {}
     for (let prop in spec) this.spec[prop] = spec[prop]
     this.spec.nodes = OrderedMap.from(spec.nodes)
@@ -426,20 +476,17 @@ class Schema {
     for (let prop in this.nodes) {
       if (prop in this.marks)
         throw new RangeError(prop + " can not be both a node and a mark")
-      let type = this.nodes[prop]
-      type.contentExpr = ContentExpr.parse(type, this.spec.nodes.get(prop).content || "")
+      let type = this.nodes[prop], contentExpr = type.spec.content || "", markExpr = type.spec.marks
+      type.contentMatch = ContentMatch.parse(contentExpr, this.nodes)
+      type.inlineContent = type.contentMatch.inlineContent
+      type.markSet = markExpr == "_" ? null :
+        markExpr ? gatherMarks(this, markExpr.split(" ")) :
+        markExpr == "" || !type.inlineContent ? [] : null
     }
     for (let prop in this.marks) {
       let type = this.marks[prop], excl = type.spec.excludes
-      type.excluded = excl == null ? [type] : excl == "" ? [] : ContentExpr.gatherMarks(this, excl.split(" "))
+      type.excluded = excl == null ? [type] : excl == "" ? [] : gatherMarks(this, excl.split(" "))
     }
-
-    // :: Object
-    // An object for storing whatever values modules may want to
-    // compute and cache per schema. (If you want to store something
-    // in it, try to use property names unlikely to clash.)
-    this.cached = Object.create(null)
-    this.cached.wrappings = Object.create(null)
 
     this.nodeFromJSON = this.nodeFromJSON.bind(this)
     this.markFromJSON = this.markFromJSON.bind(this)
@@ -448,6 +495,13 @@ class Schema {
     // The type of the [default top node](#model.SchemaSpec.topNode)
     // for this schema.
     this.topNodeType = this.nodes[this.spec.topNode || "doc"]
+
+    // :: Object
+    // An object for storing whatever values modules may want to
+    // compute and cache per schema. (If you want to store something
+    // in it, try to use property names unlikely to clash.)
+    this.cached = Object.create(null)
+    this.cached.wrappings = Object.create(null)
   }
 
   // :: (union<string, NodeType>, ?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → Node
@@ -501,4 +555,21 @@ class Schema {
     return found
   }
 }
-exports.Schema = Schema
+
+function gatherMarks(schema, marks) {
+  let found = []
+  for (let i = 0; i < marks.length; i++) {
+    let name = marks[i], mark = schema.marks[name], ok = mark
+    if (mark) {
+      found.push(mark)
+    } else {
+      for (let prop in schema.marks) {
+        let mark = schema.marks[prop]
+        if (name == "_" || (mark.spec.group && mark.spec.group.split(" ").indexOf(name) > -1))
+          found.push(ok = mark)
+      }
+    }
+    if (!ok) throw new SyntaxError("Unknown mark type: '" + marks[i] + "'")
+  }
+  return found
+}

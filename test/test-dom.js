@@ -3,7 +3,7 @@ const ist = require("ist")
 const {DOMParser, DOMSerializer, Slice, Fragment, Schema} = require("../dist")
 
 // declare global: window
-let document = typeof window == "undefined" ? require("jsdom").jsdom() : window.document
+let document = typeof window == "undefined" ? (new (require("jsdom").JSDOM)).window.document : window.document
 
 const parser = DOMParser.fromSchema(schema)
 const serializer = DOMSerializer.fromSchema(schema)
@@ -159,6 +159,10 @@ describe("DOMParser", () => {
        recover("<p>A <strong>big <strong>strong</strong> monster</strong>.</p>",
                doc(p("A ", strong("big strong monster"), "."))))
 
+    it("interprets font-style: italic as em",
+       recover("<p><span style='font-style: italic'>Hello</span>!</p>",
+               doc(p(em("Hello"), "!"))))
+
     it("interprets font-weight: bold as strong",
        recover("<p style='font-weight: bold'>Hello</p>",
                doc(p(strong("Hello")))))
@@ -180,8 +184,9 @@ describe("DOMParser", () => {
        parse("<li>wow</li><li>such</li>", {topNode: schema.nodes.bullet_list.createAndFill()},
              ul(li(p("wow")), li(p("such")))))
 
-    it("accepts the topStart option",
-       parse("<ul><li>x</li></ul>", {topNode: schema.nodes.list_item.createAndFill(), topStart: 1},
+    let item = schema.nodes.list_item.createAndFill()
+    it("accepts the topMatch option",
+       parse("<ul><li>x</li></ul>", {topNode: item, topMatch: item.contentMatchAt(1)},
              li(ul(li(p("x"))))))
 
     it("accepts from and to options",
@@ -300,6 +305,12 @@ describe("DOMParser", () => {
           doc(blockquote(ol(li(p("a"), hr)))), eq)
     })
 
+    it("understands pipes in context restrictions", () => {
+      ist(contextParser("list_item/|blockquote/")
+          .parse(domFrom("<foo></foo><blockquote><p></p><foo></foo></blockquote><ol><li><p>a</p><foo></foo></li></ol>")),
+          doc(blockquote(p(), hr), ol(li(p("a"), hr))), eq)
+    })
+
     it("uses the passed context", () => {
       let cxDoc = doc(blockquote("<a>", hr))
       ist(contextParser("doc//blockquote/").parse(domFrom("<blockquote><foo></foo></blockquote>"), {
@@ -337,6 +348,62 @@ describe("DOMParser", () => {
                 bar: {group: "inline", inline: true, parseDOM: [{tag: "bar", priority: 60}]}}
       })
       ist(DOMParser.schemaRules(schema).map(r => r.tag).join(" "), "em bar foo i")
+    })
+
+    const xmlDocument = typeof window == "undefined"
+          ? (new (require("jsdom").JSDOM)("<tag/>", {contentType: "application/xml"})).window.document
+          : window.document
+
+    function nsParse(doc, namespace) {
+      let schema = new Schema({
+        nodes: {doc: {content: "h*"}, text: {},
+                h: {parseDOM: [{tag: "h", namespace}]}}
+      })
+      return DOMParser.fromSchema(schema).parse(doc)
+    }
+
+    it("includes nodes when namespace is correct", () => {
+      let doc = xmlDocument.createElement("doc")
+      let h = xmlDocument.createElementNS("urn:ns", "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, "urn:ns").childCount, 1)
+    })
+
+    it("excludes nodes when namespace is wrong", () => {
+      let doc = xmlDocument.createElement("doc")
+      let h = xmlDocument.createElementNS("urn:nt", "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, "urn:ns").childCount, 0)
+    })
+
+    it("excludes nodes when namespace is absent", () => {
+      let doc = xmlDocument.createElement("doc")
+      // in HTML documents, createElement gives namespace
+      // 'http://www.w3.org/1999/xhtml' so use createElementNS
+      let h = xmlDocument.createElementNS(null, "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, "urn:ns").childCount, 0)
+    })
+
+    it("excludes nodes when namespace is wrong and xhtml", () => {
+      let doc = xmlDocument.createElement("doc")
+      let h = xmlDocument.createElementNS("urn:nt", "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, "http://www.w3.org/1999/xhtml").childCount, 0)
+    })
+
+    it("excludes nodes when namespace is wrong and empty", () => {
+      let doc = xmlDocument.createElement("doc")
+      let h = xmlDocument.createElementNS("urn:nt", "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, "").childCount, 0)
+    })
+
+    it("includes nodes when namespace is correct and empty", () => {
+      let doc = xmlDocument.createElement("doc")
+      let h = xmlDocument.createElementNS(null, "h")
+      doc.appendChild(h)
+      ist(nsParse(doc, null).childCount, 1)
     })
   })
 })

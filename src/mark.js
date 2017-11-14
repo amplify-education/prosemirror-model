@@ -1,4 +1,4 @@
-const {compareDeep} = require("./comparedeep")
+import {compareDeep} from "./comparedeep"
 
 // ::- A mark is a piece of information that can be attached to a node,
 // such as it being emphasized, in code font, or a link. It has a type
@@ -6,7 +6,7 @@ const {compareDeep} = require("./comparedeep")
 // (such as the target of the link). Marks are created through a
 // `Schema`, which controls which types exist and which
 // attributes they have.
-class Mark {
+export class Mark {
   constructor(type, attrs) {
     // :: MarkType
     // The type of this mark.
@@ -19,9 +19,9 @@ class Mark {
   // :: ([Mark]) → [Mark]
   // Given a set of marks, create a new set which contains this one as
   // well, in the right position. If this mark is already in the set,
-  // the set itself is returned. If a mark of this type with different
-  // attributes is already in the set, a set in which it is replaced
-  // by this one is returned.
+  // the set itself is returned. If any marks that are set to be
+  // [exclusive](#model.MarkSpec.excludes) with this mark are present,
+  // those are replaced by this one.
   addToSet(set) {
     let copy, placed = false
     for (let i = 0; i < set.length; i++) {
@@ -110,7 +110,6 @@ class Mark {
     return copy
   }
 }
-exports.Mark = Mark
 
 // :: [Mark] The empty set of marks.
 Mark.none = []

@@ -1,40 +1,41 @@
-const {Fragment} = require("./fragment")
+import {Fragment} from "./fragment"
 
-// ::- Error type raised by [`Node.replace`](#model.Node.replace) when
+// ReplaceError:: class extends Error
+// Error type raised by [`Node.replace`](#model.Node.replace) when
 // given an invalid replacement.
-class ReplaceError extends Error {
-  constructor(message) {
-    super(message)
-    this.message = message
-  }
-  get name() { return "ReplaceError" }
-}
-exports.ReplaceError = ReplaceError
 
-let warnedAboutOpen = false
-function warnAboutOpen() {
-  if (!warnedAboutOpen && typeof console != "undefined" && console.warn) {
-    warnedAboutOpen = true
-    console.warn("Slice.openLeft has been renamed to openStart, and Slice.openRight to openEnd")
-  }
+export function ReplaceError(message) {
+  let err = Error.call(this, message)
+  err.__proto__ = ReplaceError.prototype
+  return err
 }
+
+ReplaceError.prototype = Object.create(Error.prototype)
+ReplaceError.prototype.constructor = ReplaceError
+ReplaceError.prototype.name = "ReplaceError"
 
 // ::- A slice represents a piece cut out of a larger document. It
 // stores not only a fragment, but also the depth up to which nodes on
-// both side are 'open' / cut through.
-class Slice {
+// both side are ‘open’ (cut through).
+export class Slice {
   // :: (Fragment, number, number)
+  // Create a slice. When specifying a non-zero open depth, you must
+  // make sure that there are nodes of at least that depth at the
+  // appropriate side of the fragment—i.e. if the fragment is an empty
+  // paragraph node, `openStart` and `openEnd` can't be greater than 1.
+  //
+  // It is not necessary for the content of open nodes to conform to
+  // the schema's content constraints, though it should be a valid
+  // start/end/middle for such a node, depending on which sides are
+  // open.
   constructor(content, openStart, openEnd) {
-    // :: Fragment The slice's content nodes.
+    // :: Fragment The slice's content.
     this.content = content
     // :: number The open depth at the start.
     this.openStart = openStart
     // :: number The open depth at the end.
     this.openEnd = openEnd
   }
-
-  get openLeft() { warnAboutOpen(); return this.openStart }
-  get openRight() { warnAboutOpen(); return this.openEnd }
 
   // :: number
   // The size this slice would add when inserted into a document.
@@ -88,7 +89,6 @@ class Slice {
     return new Slice(fragment, openStart, openEnd)
   }
 }
-exports.Slice = Slice
 
 function removeRange(content, from, to) {
   let {index, offset} = content.findIndex(from), child = content.maybeChild(index)
@@ -115,14 +115,13 @@ function insertInto(content, dist, insert, parent) {
 // The empty slice.
 Slice.empty = new Slice(Fragment.empty, 0, 0)
 
-function replace($from, $to, slice) {
+export function replace($from, $to, slice) {
   if (slice.openStart > $from.depth)
     throw new ReplaceError("Inserted content deeper than insertion position")
   if ($from.depth - slice.openStart != $to.depth - slice.openEnd)
     throw new ReplaceError("Inconsistent open depths")
   return replaceOuter($from, $to, slice, 0)
 }
-exports.replace = replace
 
 function replaceOuter($from, $to, slice, depth) {
   let index = $from.index(depth), node = $from.node(depth)
@@ -177,7 +176,7 @@ function addRange($start, $end, depth, target) {
 }
 
 function close(node, content) {
-  if (!node.type.validContent(content, node.attrs))
+  if (!node.type.validContent(content))
     throw new ReplaceError("Invalid content for node " + node.type.name)
   return node.copy(content)
 }

@@ -1,8 +1,8 @@
-const {Fragment} = require("./fragment")
-const {Mark} = require("./mark")
-const {Slice, replace} = require("./replace")
-const {ResolvedPos} = require("./resolvedpos")
-const {compareDeep} = require("./comparedeep")
+import {Fragment} from "./fragment"
+import {Mark} from "./mark"
+import {Slice, replace} from "./replace"
+import {ResolvedPos} from "./resolvedpos"
+import {compareDeep} from "./comparedeep"
 
 const emptyAttrs = Object.create(null)
 
@@ -16,9 +16,9 @@ const emptyAttrs = Object.create(null)
 // structure between the old and new data as much as possible, which a
 // tree shape like this (without back pointers) makes easy.
 //
-// **Never** directly mutate the properties of a `Node` object. See
-// [this guide](/docs/guides/doc/) for more information.
-class Node {
+// **Do not** directly mutate the properties of a `Node` object. See
+// [the guide](/docs/guide/#doc) for more information.
+export class Node {
   constructor(type, attrs, content, marks) {
     // :: NodeType
     // The type of node that this is.
@@ -26,8 +26,8 @@ class Node {
 
     // :: Object
     // An object mapping attribute names to values. The kind of
-    // attributes allowed and required are determined by the node
-    // type.
+    // attributes allowed and required are
+    // [determined](#model.NodeSpec.attrs) by the node type.
     this.attrs = attrs
 
     // :: Fragment
@@ -36,7 +36,7 @@ class Node {
 
     // :: [Mark]
     // The marks (things like whether it is emphasized or part of a
-    // link) associated with this node.
+    // link) applied to this node.
     this.marks = marks || Mark.none
   }
 
@@ -45,8 +45,8 @@ class Node {
 
   // :: number
   // The size of this node, as defined by the integer-based [indexing
-  // scheme](/docs/guides/doc/#indexing). For text nodes, this is the
-  // amount of characters. For other leaf nodes, it is one. And for
+  // scheme](/docs/guide/#doc.indexing). For text nodes, this is the
+  // amount of characters. For other leaf nodes, it is one. For
   // non-leaf nodes, it is the size of the content plus two (the start
   // and end token).
   get nodeSize() { return this.isLeaf ? 1 : 2 + this.content.size }
@@ -69,19 +69,20 @@ class Node {
   // into this parent node, and its index.
   forEach(f) { this.content.forEach(f) }
 
-  // :: (?number, ?number, (node: Node, pos: number, parent: Node, index: number) → ?bool)
+  // :: (number, number, (node: Node, pos: number, parent: Node, index: number) → ?bool)
   // Invoke a callback for all descendant nodes recursively between
-  // the given two positions that are relative to start of this node's content.
-  // The callback is invoked with the node, its parent-relative position,
-  // its parent node, and its child index. If the callback returns false,
-  // the current node's children will not be recursed over.
+  // the given two positions that are relative to start of this node's
+  // content. The callback is invoked with the node, its
+  // parent-relative position, its parent node, and its child index.
+  // When the callback returns false for a given node, that node's
+  // children will not be recursed over.
   nodesBetween(from, to, f, pos = 0) {
     this.content.nodesBetween(from, to, f, pos, this)
   }
 
   // :: ((node: Node, pos: number, parent: Node) → ?bool)
-  // Call the given callback for every descendant node. If doesn't
-  // descend into a child node when the callback returns `false`.
+  // Call the given callback for every descendant node. Doesn't
+  // descend into a node when the callback returns `false`.
   descendants(f) {
     this.nodesBetween(0, this.content.size, f)
   }
@@ -111,7 +112,7 @@ class Node {
   get lastChild() { return this.content.lastChild }
 
   // :: (Node) → bool
-  // Test whether two nodes represent the same content.
+  // Test whether two nodes represent the same piece of document.
   eq(other) {
     return this == other || (this.sameMarkup(other) && this.content.eq(other.content))
   }
@@ -149,7 +150,7 @@ class Node {
 
   // :: (number, ?number) → Node
   // Create a copy of this node with only the content between the
-  // given offsets. If `to` is not given, it defaults to the end of
+  // given positions. If `to` is not given, it defaults to the end of
   // the node.
   cut(from, to) {
     if (from == 0 && to == this.content.size) return this
@@ -181,7 +182,7 @@ class Node {
   }
 
   // :: (number) → ?Node
-  // Find the node after the given position.
+  // Find the node starting at the given position.
   nodeAt(pos) {
     for (let node = this;;) {
       let {index, offset} = node.content.findIndex(pos)
@@ -214,13 +215,13 @@ class Node {
   }
 
   // :: (number) → ResolvedPos
-  // Resolve the given position in the document, returning an object
-  // describing its path through the document.
+  // Resolve the given position in the document, returning an
+  // [object](#model.ResolvedPos) with information about its context.
   resolve(pos) { return ResolvedPos.resolveCached(this, pos) }
 
   resolveNoCache(pos) { return ResolvedPos.resolve(this, pos) }
 
-  // :: (?number, ?number, MarkType) → bool
+  // :: (number, number, MarkType) → bool
   // Test whether a mark of the given type occurs in this document
   // between the two given positions.
   rangeHasMark(from, to, type) {
@@ -261,8 +262,8 @@ class Node {
   // :: bool
   // True when this is an atom, i.e. when it does not have directly
   // editable content. This is usually the same as `isLeaf`, but can
-  // be configured with the [`leaf` property](#model.NodeSpec.leaf) on
-  // a node's spec (typically when the node is displayed as an
+  // be configured with the [`atom` property](#model.NodeSpec.atom) on
+  // a node's spec (typically used when the node is displayed as an
   // uneditable [node view](#view.NodeView)).
   get isAtom() { return this.type.isAtom }
 
@@ -279,25 +280,31 @@ class Node {
   // :: (number) → ContentMatch
   // Get the content match in this node at the given index.
   contentMatchAt(index) {
-    return this.type.contentExpr.getMatchAt(this.attrs, this.content, index)
+    return this.type.contentMatch.matchFragment(this.content, 0, index)
   }
 
   // :: (number, number, ?Fragment, ?number, ?number) → bool
-  // Test whether replacing the range `from` to `to` (by index) with
-  // the given replacement fragment (which defaults to the empty
-  // fragment) would leave the node's content valid. You can
-  // optionally pass `start` and `end` indices into the replacement
-  // fragment.
-  canReplace(from, to, replacement, start, end) {
-    return this.type.contentExpr.checkReplace(this.attrs, this.content, from, to, replacement, start, end)
+  // Test whether replacing the range between `from` and `to` (by
+  // child index) with the given replacement fragment (which defaults
+  // to the empty fragment) would leave the node's content valid. You
+  // can optionally pass `start` and `end` indices into the
+  // replacement fragment.
+  canReplace(from, to, replacement = Fragment.empty, start = 0, end = replacement.childCount) {
+    let one = this.contentMatchAt(from).matchFragment(replacement, start, end)
+    let two = one && one.matchFragment(this.content, to)
+    if (!two || !two.validEnd) return false
+    for (let i = start; i < end; i++) if (!this.type.allowsMarks(replacement.child(i).marks)) return false
+    return true
   }
 
   // :: (number, number, NodeType, ?[Mark]) → bool
   // Test whether replacing the range `from` to `to` (by index) with a
-  // node of the given type with the given attributes and marks would
-  // be valid.
-  canReplaceWith(from, to, type, attrs, marks) {
-    return this.type.contentExpr.checkReplaceWith(this.attrs, this.content, from, to, type, attrs, marks || Mark.none)
+  // node of the given type.
+  canReplaceWith(from, to, type, marks) {
+    if (marks && !this.type.allowsMarks(marks)) return false
+    let start = this.contentMatchAt(from).matchType(type)
+    let end = start && start.matchFragment(this.content, to)
+    return end ? end.validEnd : false
   }
 
   // :: (Node) → bool
@@ -311,15 +318,14 @@ class Node {
   }
 
   defaultContentType(at) {
-    let elt = this.contentMatchAt(at).nextElement
-    return elt && elt.defaultType()
+    return this.contentMatchAt(at).defaultType
   }
 
   // :: ()
   // Check whether this node and its descendants conform to the
   // schema, and raise error when they do not.
   check() {
-    if (!this.type.validContent(this.content, this.attrs))
+    if (!this.type.validContent(this.content))
       throw new RangeError(`Invalid content for node ${this.type.name}: ${this.content.toString().slice(0, 50)}`)
     this.content.forEach(node => node.check())
   }
@@ -349,9 +355,8 @@ class Node {
     return type.create(json.attrs, Fragment.fromJSON(schema, json.content), marks)
   }
 }
-exports.Node = Node
 
-class TextNode extends Node {
+export class TextNode extends Node {
   constructor(type, attrs, content, marks) {
     super(type, attrs, null, marks)
 
@@ -369,7 +374,7 @@ class TextNode extends Node {
   get nodeSize() { return this.text.length }
 
   mark(marks) {
-    return new TextNode(this.type, this.attrs, this.text, marks)
+    return marks == this.marks ? this : new TextNode(this.type, this.attrs, this.text, marks)
   }
 
   withText(text) {
@@ -392,7 +397,6 @@ class TextNode extends Node {
     return base
   }
 }
-exports.TextNode = TextNode
 
 function wrapMarks(marks, str) {
   for (let i = marks.length - 1; i >= 0; i--)

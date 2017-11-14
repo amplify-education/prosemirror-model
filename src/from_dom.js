@@ -1,6 +1,44 @@
-const {Fragment} = require("./fragment")
-const {Slice} = require("./replace")
-const {Mark} = require("./mark")
+import {Fragment} from "./fragment"
+import {Slice} from "./replace"
+import {Mark} from "./mark"
+
+// ParseOptions:: interface
+// These are the options recognized by the
+// [`parse`](#model.DOMParser.parse) and
+// [`parseSlice`](#model.DOMParser.parseSlice) methods.
+//
+//   preserveWhitespace:: ?union<bool, "full">
+//   By default, whitespace is collapsed as per HTML's rules. Pass
+//   `true` to preserve whitespace, but normalize newlines to
+//   spaces, and `"full"` to preserve whitespace entirely.
+//
+//   findPositions:: ?[{node: dom.Node, offset: number}]
+//   When given, the parser will, beside parsing the content,
+//   record the document positions of the given DOM positions. It
+//   will do so by writing to the objects, adding a `pos` property
+//   that holds the document position. DOM positions that are not
+//   in the parsed content will not be written to.
+//
+//   from:: ?number
+//   The child node index to start parsing from.
+//
+//   to:: ?number
+//   The child node index to stop parsing at.
+//
+//   topNode:: ?Node
+//   By default, the content is parsed into the schema's default
+//   [top node type](#model.Schema.topNodeType). You can pass this
+//   option to use the type and attributes from a different node
+//   as the top container.
+//
+//   topMatch:: ?ContentMatch
+//   Provide the starting content match that content parsed into the
+//   top node is matched against.
+//
+//   context:: ?ResolvedPos
+//   A set of additional nodes to count as
+//   [context](#model.ParseRule.context) when parsing, above the
+//   given [top node](#model.ParseOptions.topNode).
 
 // ParseRule:: interface
 // A value that describes how to parse a given DOM node or inline
@@ -10,9 +48,25 @@ const {Mark} = require("./mark")
 //   A CSS selector describing the kind of DOM elements to match. A
 //   single rule should have _either_ a `tag` or a `style` property.
 //
+//   namespace:: ?string
+//   The namespace to match. This should be used with `tag`.
+//   Nodes are only matched when the namespace matches or this property
+//   is null.
+//
 //   style:: ?string
 //   A CSS property name to match. When given, this rule matches
-//   inline styles that list that property.
+//   inline styles that list that property. May also have the form
+//   `"property=value"`, in which case the rule only matches if the
+//   propery's value exactly matches the given value. (For more
+//   complicated filters, use [`getAttrs`](#model.ParseRule.getAttrs)
+//   and return undefined to indicate that the match failed.)
+//
+//   priority:: ?number
+//   Can be used to change the order in which the parse rules in a
+//   schema are tried. Those with higher priority come first. Rules
+//   without a priority are counted as having priority 50. This
+//   property is only meaningful in a schema—when directly
+//   constructing a parser, the order of the rule array is used.
 //
 //   context:: ?string
 //   When given, restricts this rule to only match when the current
@@ -23,7 +77,9 @@ const {Mark} = require("./mark")
 //   parent node is a paragraph, `"blockquote/paragraph/"` restricts
 //   it to be in a paragraph that is inside a blockquote, and
 //   `"section//"` matches any position inside a section—a double
-//   slash matches any sequence of ancestor nodes.
+//   slash matches any sequence of ancestor nodes. To allow multiple
+//   different contexts, they can be separated by a pipe (`|`)
+//   character, as in `"blockquote/|list_item/"`.
 //
 //   node:: ?string
 //   The name of the node type to create when this rule matches. Only
@@ -36,13 +92,6 @@ const {Mark} = require("./mark")
 //   mark:: ?string
 //   The name of the mark type to wrap the matched content in.
 //
-//   priority:: ?number
-//   Can be used to change the order in which the parse rules in a
-//   schema are tried. Those with higher priority come first. Rules
-//   without a priority are counted as having priority 50. This
-//   property is only meaningful in a schema—when directly
-//   constructing a parser, the order of the rule array is used.
-//
 //   ignore:: ?bool
 //   When true, ignore content that matches this rule.
 //
@@ -54,7 +103,7 @@ const {Mark} = require("./mark")
 //   Attributes for the node or mark created by this rule. When
 //   `getAttrs` is provided, it takes precedence.
 //
-//   getAttrs:: ?(union<dom.Node, string>) → ?union<bool, Object>
+//   getAttrs:: ?(union<dom.Node, string>) → ?union<Object, false>
 //   A function used to compute the attributes for the node or mark
 //   created by this rule. Can also be used to describe further
 //   conditions the DOM element or style must match. When it returns
@@ -64,17 +113,18 @@ const {Mark} = require("./mark")
 //   Called with a DOM Element for `tag` rules, and with a string (the
 //   style's value) for `style` rules.
 //
-//   contentElement:: ?string
+//   contentElement:: ?union<string, (dom.Node) → dom.Node>
 //   For `tag` rules that produce non-leaf nodes or marks, by default
 //   the content of the DOM element is parsed as content of the mark
 //   or node. If the child nodes are in a descendent node, this may be
 //   a CSS selector string that the parser must use to find the actual
-//   content element.
+//   content element, or a function that returns the actual content
+//   element to the parser.
 //
 //   getContent:: ?(dom.Node) → Fragment
-//   Can be used to override the content of a matched node. Will be
-//   called, and its result used, instead of parsing the node's child
-//   nodes.
+//   Can be used to override the content of a matched node. When
+//   present, instead of parsing the node's child nodes, the result of
+//   this function is used.
 //
 //   preserveWhitespace:: ?union<bool, "full">
 //   Controls whether whitespace should be preserved when parsing the
@@ -86,14 +136,17 @@ const {Mark} = require("./mark")
 // ::- A DOM parser represents a strategy for parsing DOM content into
 // a ProseMirror document conforming to a given schema. Its behavior
 // is defined by an array of [rules](#model.ParseRule).
-class DOMParser {
+export class DOMParser {
   // :: (Schema, [ParseRule])
   // Create a parser that targets the given schema, using the given
   // parsing rules.
   constructor(schema, rules) {
     // :: Schema
+    // The schema into which the parser parses.
     this.schema = schema
     // :: [ParseRule]
+    // The set of [parse rules](#model.ParseRule) that the parser
+    // uses, in order of precedence.
     this.rules = rules
     this.tags = []
     this.styles = []
@@ -104,51 +157,15 @@ class DOMParser {
     })
   }
 
-  // :: (dom.Node, ?Object) → Node
+  // :: (dom.Node, ?ParseOptions) → Node
   // Parse a document from the content of a DOM node.
-  //
-  //   options::- Configuration options.
-  //
-  //     preserveWhitespace:: ?union<bool, "full">
-  //     By default, whitespace is collapsed as per HTML's rules. Pass
-  //     `true` to preserve whitespace, but normalize newlines to
-  //     spaces, and `"full"` to preserve whitespace entirely.
-  //
-  //     findPositions:: ?[{node: dom.Node, offset: number}]
-  //     When given, the parser will, beside parsing the content,
-  //     record the document positions of the given DOM positions. It
-  //     will do so by writing to the objects, adding a `pos` property
-  //     that holds the document position. DOM positions that are not
-  //     in the parsed content will not be written to.
-  //
-  //     from:: ?number
-  //     The child node index to start parsing from.
-  //
-  //     to:: ?number
-  //     The child node index to stop parsing at.
-  //
-  //     topNode:: ?Node
-  //     By default, the content is parsed into the schema's default
-  //     [top node type](#model.Schema.topNodeType). You can pass this
-  //     option to use the type and attributes from a different node
-  //     as the top container.
-  //
-  //     topStart:: ?number
-  //     Can be used to influence the content match at the start of
-  //     the topnode. When given, should be a valid index into
-  //     `topNode`.
-  //
-  //     context:: ?ResolvedPos
-  //     A set of additional node names to count as
-  //     [context](#model.ParseRule.context) when parsing, above the
-  //     given [top node](#model.DOMParser.parse^options.topNode).
   parse(dom, options = {}) {
     let context = new ParseContext(this, options, false)
     context.addAll(dom, null, options.from, options.to)
     return context.finish()
   }
 
-  // :: (dom.Node, ?Object) → Slice
+  // :: (dom.Node, ?ParseOptions) → Slice
   // Parses the content of the given DOM node, like
   // [`parse`](#model.DOMParser.parse), and takes the same set of
   // options. But unlike that method, which produces a whole node,
@@ -164,7 +181,9 @@ class DOMParser {
   matchTag(dom, context) {
     for (let i = 0; i < this.tags.length; i++) {
       let rule = this.tags[i]
-      if (matches(dom, rule.tag) && (!rule.context || context.matchesContext(rule.context))) {
+      if (matches(dom, rule.tag) &&
+          (rule.namespace === undefined || dom.namespaceURI == rule.namespace) &&
+          (!rule.context || context.matchesContext(rule.context))) {
         if (rule.getAttrs) {
           let result = rule.getAttrs(dom)
           if (result === false) continue
@@ -178,20 +197,24 @@ class DOMParser {
   matchStyle(prop, value, context) {
     for (let i = 0; i < this.styles.length; i++) {
       let rule = this.styles[i]
-      if (rule.style == prop && (!rule.context || context.matchesContext(rule.context))) {
-        if (rule.getAttrs) {
-          let result = rule.getAttrs(value)
-          if (result === false) continue
-          rule.attrs = result
-        }
-        return rule
+      if (rule.style.indexOf(prop) != 0 ||
+          rule.context && !context.matchesContext(rule.context) ||
+          // Test that the style string either precisely matches the prop,
+          // or has an '=' sign after the prop, followed by the given
+          // value.
+          rule.style.length > prop.length &&
+          (rule.style.charCodeAt(prop.length) != 61 || rule.style.slice(prop.length + 1) != value))
+        continue
+      if (rule.getAttrs) {
+        let result = rule.getAttrs(value)
+        if (result === false) continue
+        rule.attrs = result
       }
+      return rule
     }
   }
 
-  // :: (Schema) → [ParseRule]
-  // Extract the parse rules listed in a schema's [node
-  // specs](#model.NodeSpec.parseDOM).
+  // : (Schema) → [ParseRule]
   static schemaRules(schema) {
     let result = []
     function insert(rule) {
@@ -222,13 +245,13 @@ class DOMParser {
 
   // :: (Schema) → DOMParser
   // Construct a DOM parser using the parsing rules listed in a
-  // schema's [node specs](#model.NodeSpec.parseDOM).
+  // schema's [node specs](#model.NodeSpec.parseDOM), reordered by
+  // [priority](#model.ParseRule.priority).
   static fromSchema(schema) {
     return schema.cached.domParser ||
       (schema.cached.domParser = new DOMParser(schema, DOMParser.schemaRules(schema)))
   }
 }
-exports.DOMParser = DOMParser
 
 // : Object<bool> The block-level tags in HTML5
 const blockTags = {
@@ -259,26 +282,28 @@ class NodeContext {
     this.type = type
     this.attrs = attrs
     this.solid = solid
-    this.match = match || (options & OPT_OPEN_LEFT ? null : type.contentExpr.start(attrs))
+    this.match = match || (options & OPT_OPEN_LEFT ? null : type.contentMatch)
     this.options = options
     this.content = []
   }
 
-  findWrapping(type, attrs) {
+  findWrapping(node) {
     if (!this.match) {
       if (!this.type) return []
-      let found = this.type.contentExpr.atType(this.attrs, type, attrs)
-      if (!found) {
-        let start = this.type.contentExpr.start(this.attrs), wrap
-        if (wrap = start.findWrapping(type, attrs)) {
+      let fill = this.type.contentMatch.fillBefore(Fragment.from(node))
+      if (fill) {
+        this.match = this.type.contentMatch.matchFragment(fill)
+      } else {
+        let start = this.type.contentMatch, wrap
+        if (wrap = start.findWrapping(node.type)) {
           this.match = start
           return wrap
+        } else {
+          return null
         }
       }
-      if (found) this.match = found
-      else return null
     }
-    return this.match.findWrapping(type, attrs)
+    return this.match.findWrapping(node.type)
   }
 
   finish(openEnd) {
@@ -308,7 +333,7 @@ class ParseContext {
     let topOptions = wsOptionsFor(options.preserveWhitespace) | (open ? OPT_OPEN_LEFT : 0)
     if (topNode)
       topContext = new NodeContext(topNode.type, topNode.attrs, true,
-                                   topNode.contentMatchAt(options.topStart || 0), topOptions)
+                                   options.topMatch || topNode.type.contentMatch, topOptions)
     else if (open)
       topContext = new NodeContext(null, null, true, null, topOptions)
     else
@@ -350,7 +375,7 @@ class ParseContext {
   addTextNode(dom) {
     let value = dom.nodeValue
     let top = this.top
-    if ((top.type && top.type.inlineContent) || /\S/.test(value)) {
+    if ((top.type ? top.type.inlineContent : top.content.length && top.content[0].isInline) || /\S/.test(value)) {
       if (!(top.options & OPT_PRESERVE_WS)) {
         value = value.replace(/\s+/g, " ")
         // If this starts with whitespace, and there is either no node
@@ -433,6 +458,7 @@ class ParseContext {
     } else {
       let contentDOM = rule.contentElement
       if (typeof contentDOM == "string") contentDOM = dom.querySelector(contentDOM)
+      else if (typeof contentDOM == "function") contentDOM = contentDOM(dom)
       if (!contentDOM) contentDOM = dom
       this.findAround(dom, contentDOM, true)
       this.addAll(contentDOM, sync)
@@ -462,22 +488,22 @@ class ParseContext {
   // Try to find a way to fit the given node type into the current
   // context. May add intermediate wrappers and/or leave non-solid
   // nodes that we're in.
-  findPlace(type, attrs) {
+  findPlace(node) {
     let route, sync
     for (let depth = this.open; depth >= 0; depth--) {
-      let node = this.nodes[depth]
-      let found = node.findWrapping(type, attrs)
+      let cx = this.nodes[depth]
+      let found = cx.findWrapping(node)
       if (found && (!route || route.length > found.length)) {
         route = found
-        sync = node
+        sync = cx
         if (!found.length) break
       }
-      if (node.solid) break
+      if (cx.solid) break
     }
     if (!route) return false
     this.sync(sync)
     for (let i = 0; i < route.length; i++)
-      this.enterInner(route[i].type, route[i].attrs, false)
+      this.enterInner(route[i], null, false)
     return true
   }
 
@@ -488,16 +514,12 @@ class ParseContext {
       let block = this.textblockFromContext()
       if (block) this.enter(block)
     }
-    if (this.findPlace(node.type, node.attrs)) {
+    if (this.findPlace(node)) {
       this.closeExtra()
       let top = this.top
       if (top.match) {
-        let match = top.match.matchNode(node)
-        if (!match) {
-          node = node.mark(node.marks.filter(mark => top.match.allowsMark(mark.type)))
-          match = top.match.matchNode(node)
-        }
-        top.match = match
+        top.match = top.match.matchType(node.type)
+        if (top.type) node = node.mark(top.type.allowedMarks(node.marks))
       }
       top.content.push(node)
     }
@@ -507,7 +529,7 @@ class ParseContext {
   // Try to start a node of the given type, adjusting the context when
   // necessary.
   enter(type, attrs, preserveWS) {
-    let ok = this.findPlace(type, attrs)
+    let ok = this.findPlace(type.create(attrs))
     if (ok) this.enterInner(type, attrs, true, preserveWS)
     return ok
   }
@@ -594,6 +616,9 @@ class ParseContext {
   // Determines whether the given [context
   // string](#ParseRule.context) matches this context.
   matchesContext(context) {
+    if (context.indexOf("|") > -1)
+      return context.split(/\s*\|\s*/).some(this.matchesContext, this)
+
     let parts = context.split("/")
     let option = this.options.context
     let useRoot = !this.isOpen && (!option || option.parent.type == this.nodes[0].type)
