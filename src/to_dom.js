@@ -5,11 +5,11 @@
 //
 // An array describes a DOM element. The first value in the array
 // should be a string—the name of the DOM element. If the second
-// element is plain object object, it is interpreted as an set of
-// attributes for the element. Any elements after that (including the
-// 2nd if it's not an attribute object) are interpreted as children of
-// the DOM elements, and must either be valid `DOMOutputSpec` values,
-// or the number zero.
+// element is plain object, it is interpreted as a set of attributes
+// for the element. Any elements after that (including the 2nd if it's
+// not an attribute object) are interpreted as children of the DOM
+// elements, and must either be valid `DOMOutputSpec` values, or the
+// number zero.
 //
 // The number zero (pronounced “hole”) is used to indicate the place
 // where a node's child nodes should be inserted. It it occurs in an
@@ -48,18 +48,25 @@ export class DOMSerializer {
     fragment.forEach(node => {
       if (active || node.marks.length) {
         if (!active) active = []
-        let keep = 0
-        for (; keep < Math.min(active.length, node.marks.length); ++keep)
-          if (!node.marks[keep].eq(active[keep])) break
-        while (keep < active.length) {
-          let removed = active.pop()
-          if (this.marks[removed.type.name]) top = top.parentNode
+        let keep = 0, rendered = 0
+        while (keep < active.length && rendered < node.marks.length) {
+          let next = node.marks[rendered]
+          if (!this.marks[next.type.name]) { rendered++; continue }
+          if (!next.eq(active[keep]) || next.type.spec.spanning === false) break
+          keep += 2; rendered++
         }
-        while (active.length < node.marks.length) {
-          let add = node.marks[active.length]
-          active.push(add)
+        while (keep < active.length) {
+          top = active.pop()
+          active.pop()
+        }
+        while (rendered < node.marks.length) {
+          let add = node.marks[rendered++]
           let markDOM = this.serializeMark(add, node.isInline, options)
-          if (markDOM) top = top.appendChild(markDOM)
+          if (markDOM) {
+            active.push(add, top)
+            top.appendChild(markDOM.dom)
+            top = markDOM.contentDOM || markDOM.dom
+          }
         }
       }
       top.appendChild(this.serializeNode(node, options))
@@ -75,7 +82,17 @@ export class DOMSerializer {
   // [`serializeFragment`](#model.DOMSerializer.serializeFragment) on
   // its [content](#model.Node.content).
   serializeNode(node, options = {}) {
-    return this.renderStructure(this.nodes[node.type.name](node), node, options)
+    let {dom, contentDOM} =
+        DOMSerializer.renderSpec(doc(options), this.nodes[node.type.name](node))
+    if (contentDOM) {
+      if (node.isLeaf)
+        throw new RangeError("Content hole not allowed in a leaf node spec")
+      if (options.onContent)
+        options.onContent(node, contentDOM, options)
+      else
+        this.serializeFragment(node.content, options, contentDOM)
+    }
+    return dom
   }
 
   serializeNodeAndMarks(node, options = {}) {
@@ -83,8 +100,8 @@ export class DOMSerializer {
     for (let i = node.marks.length - 1; i >= 0; i--) {
       let wrap = this.serializeMark(node.marks[i], node.isInline, options)
       if (wrap) {
-        wrap.appendChild(dom)
-        dom = wrap
+        ;(wrap.contentDOM || wrap.dom).appendChild(dom)
+        dom = wrap.dom
       }
     }
     return dom
@@ -92,7 +109,7 @@ export class DOMSerializer {
 
   serializeMark(mark, inline, options = {}) {
     let toDOM = this.marks[mark.type.name]
-    return toDOM && this.renderStructure(toDOM(mark, inline), null, options)
+    return toDOM && DOMSerializer.renderSpec(doc(options), toDOM(mark, inline))
   }
 
   // :: (dom.Document, DOMOutputSpec) → {dom: dom.Node, contentDOM: ?dom.Node}
@@ -109,8 +126,7 @@ export class DOMSerializer {
     if (attrs && typeof attrs == "object" && attrs.nodeType == null && !Array.isArray(attrs)) {
       start = 2
       for (let name in attrs) {
-        if (name == "style") dom.style.cssText = attrs[name]
-        else if (attrs[name] != null) dom.setAttribute(name, attrs[name])
+        if (attrs[name] != null) dom.setAttribute(name, attrs[name])
       }
     }
     for (let i = start; i < structure.length; i++) {
@@ -129,19 +145,6 @@ export class DOMSerializer {
       }
     }
     return {dom, contentDOM}
-  }
-
-  renderStructure(structure, node, options) {
-    let {dom, contentDOM} = DOMSerializer.renderSpec(doc(options), structure)
-    if (contentDOM) {
-      if (!node || node.isLeaf)
-        throw new RangeError("Content hole not allowed in a mark or leaf node spec")
-      if (options.onContent)
-        options.onContent(node, contentDOM, options)
-      else
-        this.serializeFragment(node.content, options, contentDOM)
-    }
-    return dom
   }
 
   // :: (Schema) → DOMSerializer

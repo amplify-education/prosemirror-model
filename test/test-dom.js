@@ -1,4 +1,5 @@
-const {schema, eq, doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, br, img, hr} = require("prosemirror-test-builder")
+const {schema, eq, doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, br, img, hr,
+       builders} = require("prosemirror-test-builder")
 const ist = require("ist")
 const {DOMParser, DOMSerializer, Slice, Fragment, Schema} = require("../dist")
 
@@ -18,12 +19,12 @@ describe("DOMParser", () => {
 
     function test(doc, html) {
       return () => {
-        let derivedDOM = document.createElement("div")
-        derivedDOM.appendChild(serializer.serializeFragment(doc.content, {document}))
+        let derivedDOM = document.createElement("div"), schema = doc.type.schema
+        derivedDOM.appendChild(DOMSerializer.fromSchema(schema).serializeFragment(doc.content, {document}))
         let declaredDOM = domFrom(html)
 
         ist(derivedDOM.innerHTML, declaredDOM.innerHTML)
-        ist(DOMParser.fromSchema(doc.type.schema).parse(derivedDOM), doc, eq)
+        ist(DOMParser.fromSchema(schema).parse(derivedDOM), doc, eq)
       }
     }
 
@@ -79,6 +80,33 @@ describe("DOMParser", () => {
        test(doc(p(em("hi", br, "x"))),
             "<p><em>hi<br>x</em></p>"))
 
+    it("can parse marks on block nodes", () => {
+      let commentSchema = new Schema({
+        nodes: schema.spec.nodes.update("doc", Object.assign({marks: "comment"}, schema.spec.nodes.get("doc"))),
+        marks: schema.spec.marks.update("comment", {
+          parseDOM: [{tag: "div.comment"}],
+          toDOM() { return ["div", {class: "comment"}, 0] }
+        })
+      })
+      let b = builders(commentSchema)
+      test(b.doc(b.paragraph("one"), b.comment(b.paragraph("two"), b.paragraph(b.strong("three"))), b.paragraph("four")),
+           "<p>one</p><div class=\"comment\"><p>two</p><p><strong>three</strong></p></div><p>four</p>")()
+    })
+
+    it("serializes non-spanning marks correctly", () => {
+      let markSchema = new Schema({
+        nodes: schema.spec.nodes,
+        marks: schema.spec.marks.update("test", {
+          parseDOM: [{tag: "test"}],
+          toDOM() { return ["test", 0] },
+          spanning: false
+        })
+      })
+      let b = builders(markSchema)
+      test(b.doc(b.paragraph(b.test("a", b.image({src: "x"}), "b"))),
+           "<p><test>a</test><test><img src=\"x\"></test><test>b</test></p>")()
+    })
+
     function recover(html, doc, options) {
       return () => {
         let dom = document.createElement("div")
@@ -114,6 +142,10 @@ describe("DOMParser", () => {
     it("ignores meaningless whitespace",
        recover(" <blockquote> <p>woo  \n  <em> hooo</em></p> </blockquote> ",
                doc(blockquote(p("woo ", em("hooo"))))))
+
+   it("removes whitespace after a hard break",
+      recover("<p>hello<br>\n  world</p>",
+              doc(p("hello", br, "world"))))
 
     it("finds a valid place for invalid content",
        recover("<ul><li>hi</li><p>whoah</p><li>again</li></ul>",
@@ -171,6 +203,14 @@ describe("DOMParser", () => {
        recover("<p><u>a</u>bc</p>",
                doc(p("abc"))))
 
+    it("can add marks specified before their parent node is opened",
+       recover("<em>hi</em> you",
+               doc(p(em("hi"), " you"))))
+
+    it("keeps applying a mark for the all of the node's content",
+       recover("<p><strong><span>xx</span>bar</strong></p>",
+               doc(p(strong("xxbar")))))
+
     function parse(html, options, doc) {
       return () => {
         let dom = document.createElement("div")
@@ -223,6 +263,10 @@ describe("DOMParser", () => {
 
     it("will create textblocks for block nodes",
        open("<div><div>foo</div><div>bar</div></div>", [p("foo"), p("bar")], 1, 1))
+
+    it("can parse marks at the start of defaulted textblocks",
+       open("<div>foo</div><div><em>bar</em></div>",
+            [p("foo"), p(em("bar"))], 1, 1))
 
     function find(html, doc) {
       return () => {
@@ -409,9 +453,23 @@ describe("DOMParser", () => {
 })
 
 describe("DOMSerializer", () => {
+  let noEm = new DOMSerializer(serializer.nodes, Object.assign({}, serializer.marks, {em: null}))
+
   it("can omit a mark", () => {
-    let s = new DOMSerializer(serializer.nodes, Object.assign({}, serializer.marks, {em: null}))
-    ist(s.serializeNode(p("foo", em("bar"), strong("baz")), {document}).innerHTML,
+    ist(noEm.serializeNode(p("foo", em("bar"), strong("baz")), {document}).innerHTML,
         "foobar<strong>baz</strong>")
+  })
+
+  it("doesn't split other marks for omitted marks", () => {
+    ist(noEm.serializeNode(p("foo", code("bar"), em(code("baz"), "quux"), "xyz"), {document}).innerHTML,
+        "foo<code>barbaz</code>quuxxyz")
+  })
+
+  it("can render marks with complex structure", () => {
+    let deepEm = new DOMSerializer(serializer.nodes, Object.assign({}, serializer.marks, {
+      em() { return ["em", ["i", {"data-emphasis": true}, 0]] }
+    }))
+    ist(deepEm.serializeNode(p(strong("foo", code("bar"), em(code("baz"))), em("quux"), "xyz"), {document}).innerHTML,
+        "<strong>foo<code>bar</code></strong><em><i data-emphasis=\"true\"><strong><code>baz</code></strong>quux</i></em>xyz")
   })
 })

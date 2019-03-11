@@ -24,8 +24,8 @@ export class ContentMatch {
   }
 
   // :: (NodeType) → ?ContentMatch
-  // Match a node type and marks, returning a match after that node
-  // if successful.
+  // Match a node type, returning a match after that node if
+  // successful.
   matchType(type) {
     for (let i = 0; i < this.next.length; i += 2)
       if (this.next[i] == type) return this.next[i + 1]
@@ -47,8 +47,14 @@ export class ContentMatch {
     return first ? first.isInline : false
   }
 
+  // :: ?NodeType
+  // Get the first matching node type at this match position that can
+  // be generated.
   get defaultType() {
-    return this.next[0]
+    for (let i = 0; i < this.next.length; i += 2) {
+      let type = this.next[i]
+      if (!(type.isText || type.hasRequiredAttrs())) return type
+    }
   }
 
   compatible(other) {
@@ -74,7 +80,7 @@ export class ContentMatch {
 
       for (let i = 0; i < match.next.length; i += 2) {
         let type = match.next[i], next = match.next[i + 1]
-        if (!type.hasRequiredAttrs() && seen.indexOf(next) == -1) {
+        if (!(type.isText || type.hasRequiredAttrs()) && seen.indexOf(next) == -1) {
           seen.push(next)
           let found = search(next, types.concat(type))
           if (found) return found
@@ -110,12 +116,28 @@ export class ContentMatch {
       }
       for (let i = 0; i < match.next.length; i += 2) {
         let type = match.next[i]
-        if (!type.isLeaf && !(type.name in seen) && (!current.type || match.next[i + 1].validEnd)) {
+        if (!type.isLeaf && !type.hasRequiredAttrs() && !(type.name in seen) && (!current.type || match.next[i + 1].validEnd)) {
           active.push({match: type.contentMatch, type, via: current})
           seen[type.name] = true
         }
       }
     }
+  }
+
+  // :: number
+  // The number of outgoing edges this node has in the finite
+  // automaton that describes the content expression.
+  get edgeCount() {
+    return this.next.length >> 1
+  }
+
+  // :: (number) → {type: NodeType, next: ContentMatch}
+  // Get the _n_th outgoing edge from this node in the finite
+  // automaton that describes the content expression.
+  edge(n) {
+    let i = n << 1
+    if (i > this.next.length) throw new RangeError(`There's no ${n}th edge in this content match`)
+    return {type: this.next[i], next: this.next[i + 1]}
   }
 
   toString() {
@@ -305,15 +327,20 @@ function nfa(expr) {
 
 function cmp(a, b) { return a - b }
 
+// Get the set of nodes reachable by null edges from `node`. Omit
+// nodes with only a single null-out-edge, since they may lead to
+// needless duplicated nodes.
 function nullFrom(nfa, node) {
   let result = []
   scan(node)
   return result.sort(cmp)
 
   function scan(node) {
+    let edges = nfa[node]
+    if (edges.length == 1 && !edges[0].term) return scan(edges[0].to)
     result.push(node)
-    for (let a = nfa[node], i = 0; i < a.length; i++) {
-      let {term, to} = a[i]
+    for (let i = 0; i < edges.length; i++) {
+      let {term, to} = edges[i]
       if (!term && result.indexOf(to) == -1) scan(to)
     }
   }
@@ -354,9 +381,9 @@ function checkForDeadEnds(match, stream) {
     for (let j = 0; j < state.next.length; j += 2) {
       let node = state.next[j], next = state.next[j + 1]
       nodes.push(node.name)
-      if (dead && !state.next[j].hasRequiredAttrs()) dead = false
+      if (dead && !(node.isText || node.hasRequiredAttrs())) dead = false
       if (work.indexOf(next) == -1) work.push(next)
     }
-    if (dead) stream.err("Only non-generatable nodes (" + nodes.join(", ") + ") after a match state")
+    if (dead) stream.err("Only non-generatable nodes (" + nodes.join(", ") + ") in a required position")
   }
 }

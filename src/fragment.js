@@ -16,7 +16,7 @@ export class Fragment {
       this.size += content[i].nodeSize
   }
 
-  // :: (number, number, (node: Node, start: number, parent: Node, index: number) → ?bool)
+  // :: (number, number, (node: Node, start: number, parent: Node, index: number) → ?bool, ?number)
   // Invoke a callback for all descendant nodes between the given two
   // positions (relative to start of this fragment). Doesn't descend
   // into a node when the callback returns `false`.
@@ -182,7 +182,7 @@ export class Fragment {
     return findDiffStart(this, other, pos)
   }
 
-  // :: (Node) → ?{a: number, b: number}
+  // :: (Fragment) → ?{a: number, b: number}
   // Find the first position, searching from the end, at which this
   // fragment and the given fragment differ, or `null` if they are the
   // same. Since this position will not be the same in both nodes, an
@@ -224,7 +224,9 @@ export class Fragment {
   // :: (Schema, ?Object) → Fragment
   // Deserialize a fragment from its JSON representation.
   static fromJSON(schema, value) {
-    return value ? new Fragment(value.map(schema.nodeFromJSON)) : Fragment.empty
+    if (!value) return Fragment.empty
+    if (!Array.isArray(value)) throw new RangeError("Invalid input for Fragment.fromJSON")
+    return new Fragment(value.map(schema.nodeFromJSON))
   }
 
   // :: ([Node]) → Fragment

@@ -69,15 +69,16 @@ export class Node {
   // into this parent node, and its index.
   forEach(f) { this.content.forEach(f) }
 
-  // :: (number, number, (node: Node, pos: number, parent: Node, index: number) → ?bool)
+  // :: (number, number, (node: Node, pos: number, parent: Node, index: number) → ?bool, ?number)
   // Invoke a callback for all descendant nodes recursively between
   // the given two positions that are relative to start of this node's
   // content. The callback is invoked with the node, its
   // parent-relative position, its parent node, and its child index.
   // When the callback returns false for a given node, that node's
-  // children will not be recursed over.
-  nodesBetween(from, to, f, pos = 0) {
-    this.content.nodesBetween(from, to, f, pos, this)
+  // children will not be recursed over. The last parameter can be
+  // used to specify a starting position to count from.
+  nodesBetween(from, to, f, startPos = 0) {
+    this.content.nodesBetween(from, to, f, startPos, this)
   }
 
   // :: ((node: Node, pos: number, parent: Node) → ?bool)
@@ -182,7 +183,7 @@ export class Node {
   }
 
   // :: (number) → ?Node
-  // Find the node starting at the given position.
+  // Find the node directly after the given position.
   nodeAt(pos) {
     for (let node = this;;) {
       let {index, offset} = node.content.findIndex(pos)
@@ -226,7 +227,7 @@ export class Node {
   // between the two given positions.
   rangeHasMark(from, to, type) {
     let found = false
-    this.nodesBetween(from, to, node => {
+    if (to > from) this.nodesBetween(from, to, node => {
       if (type.isInSet(node.marks)) found = true
       return !found
     })
@@ -243,7 +244,7 @@ export class Node {
   get isTextblock() { return this.type.isTextblock }
 
   // :: bool
-  // True when this node has inline content.
+  // True when this node allows inline content.
   get inlineContent() { return this.type.inlineContent }
 
   // :: bool
@@ -271,6 +272,7 @@ export class Node {
   // Return a string representation of this node for debugging
   // purposes.
   toString() {
+    if (this.type.spec.toDebugString) return this.type.spec.toDebugString(this)
     let name = this.type.name
     if (this.content.size)
       name += "(" + this.content.toStringInner() + ")"
@@ -280,7 +282,9 @@ export class Node {
   // :: (number) → ContentMatch
   // Get the content match in this node at the given index.
   contentMatchAt(index) {
-    return this.type.contentMatch.matchFragment(this.content, 0, index)
+    let match = this.type.contentMatch.matchFragment(this.content, 0, index)
+    if (!match) throw new Error("Called contentMatchAt on a node with invalid content")
+    return match
   }
 
   // :: (number, number, ?Fragment, ?number, ?number) → bool
@@ -299,7 +303,7 @@ export class Node {
 
   // :: (number, number, NodeType, ?[Mark]) → bool
   // Test whether replacing the range `from` to `to` (by index) with a
-  // node of the given type.
+  // node of the given type would leave the node's content valid.
   canReplaceWith(from, to, type, marks) {
     if (marks && !this.type.allowsMarks(marks)) return false
     let start = this.contentMatchAt(from).matchType(type)
@@ -317,6 +321,7 @@ export class Node {
     else return this.type.compatibleContent(other.type)
   }
 
+  // Unused. Left for backwards compatibility.
   defaultContentType(at) {
     return this.contentMatchAt(at).defaultType
   }
@@ -348,11 +353,18 @@ export class Node {
   // :: (Schema, Object) → Node
   // Deserialize a node from its JSON representation.
   static fromJSON(schema, json) {
-    let marks = json.marks && json.marks.map(schema.markFromJSON)
-    if (json.type == "text") return schema.text(json.text, marks)
-    let type = schema.nodeType(json.type)
-    if (!type) throw new RangeError(`There is no node type ${json.type} in this schema`)
-    return type.create(json.attrs, Fragment.fromJSON(schema, json.content), marks)
+    if (!json) throw new RangeError("Invalid input for Node.fromJSON")
+    let marks = null
+    if (json.marks) {
+      if (!Array.isArray(json.marks)) throw new RangeError("Invalid mark data for Node.fromJSON")
+      marks = json.marks.map(schema.markFromJSON)
+    }
+    if (json.type == "text") {
+      if (typeof json.text != "string") throw new RangeError("Invalid text node in JSON")
+      return schema.text(json.text, marks)
+    }
+    let content = Fragment.fromJSON(schema, json.content)
+    return schema.nodeType(json.type).create(json.attrs, content, marks)
   }
 }
 
@@ -365,7 +377,10 @@ export class TextNode extends Node {
     this.text = content
   }
 
-  toString() { return wrapMarks(this.marks, JSON.stringify(this.text)) }
+  toString() {
+    if (this.type.spec.toDebugString) return this.type.spec.toDebugString(this)
+    return wrapMarks(this.marks, JSON.stringify(this.text))
+  }
 
   get textContent() { return this.text }
 

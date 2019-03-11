@@ -125,7 +125,6 @@ export class NodeType {
   // `null`. Similarly `marks` may be `null` to default to the empty
   // set of marks.
   create(attrs, content, marks) {
-    if (typeof content == "string") throw new Error("Calling create with string")
     if (this.isText) throw new Error("NodeType.create can't construct text nodes")
     return new Node(this, this.computeAttrs(attrs), Fragment.from(content), Mark.setFrom(marks))
   }
@@ -397,6 +396,10 @@ export class MarkType {
 //   implied (the name of this node will be filled in automatically).
 //   If you supply your own parser, you do not need to also specify
 //   parsing rules in your schema.
+//
+//   toDebugString:: ?(node: Node) -> string
+//   Defines the default way a node of this type should be serialized
+//   to a string representation for debugging (e.g. in error messages).
 
 // MarkSpec:: interface
 //
@@ -426,9 +429,15 @@ export class MarkType {
 //   group:: ?string
 //   The group or space-separated groups to which this mark belongs.
 //
+//   spanning:: ?bool
+//   Determines whether marks of this type can span multiple adjacent
+//   nodes when serialized to DOM/HTML. Defaults to true.
+//
 //   toDOM:: ?(mark: Mark, inline: bool) → DOMOutputSpec
 //   Defines the default way marks of this type should be serialized
-//   to DOM/HTML.
+//   to DOM/HTML. When the resulting spec contains a hole, that is
+//   where the marked content is placed. Otherwise, it is appended to
+//   the top node.
 //
 //   parseDOM:: ?[ParseRule]
 //   Associates DOM parser information with this mark (see the
@@ -473,11 +482,13 @@ export class Schema {
     // A map from mark names to mark type objects.
     this.marks = MarkType.compile(this.spec.marks, this)
 
+    let contentExprCache = Object.create(null)
     for (let prop in this.nodes) {
       if (prop in this.marks)
         throw new RangeError(prop + " can not be both a node and a mark")
       let type = this.nodes[prop], contentExpr = type.spec.content || "", markExpr = type.spec.marks
-      type.contentMatch = ContentMatch.parse(contentExpr, this.nodes)
+      type.contentMatch = contentExprCache[contentExpr] ||
+        (contentExprCache[contentExpr] = ContentMatch.parse(contentExpr, this.nodes))
       type.inlineContent = type.contentMatch.inlineContent
       type.markSet = markExpr == "_" ? null :
         markExpr ? gatherMarks(this, markExpr.split(" ")) :
